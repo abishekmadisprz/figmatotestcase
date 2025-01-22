@@ -86,13 +86,9 @@ def send_request_with_image(base64_image, your_prompt):
 # Streamlit app
 def main():
     st.markdown(
-        '<div style="text-align: center; margin-top: -55px; "><img src="./app/static/disprz_reverse.png" width="200"></div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
         """
         <div style="text-align: center; font-family: 'Source Sans Pro', sans-serif; font-size: 30px; font-weight: 650; margin-bottom: 15px; margin-top: -10px;">
-        ✨ Figma Design to Test Cases ✨
+        🎨 Figma Design to Test Cases 💻
         </div>
         """,
         unsafe_allow_html=True,
