@@ -14,12 +14,10 @@ st.set_page_config(
     page_title="Figma Design to Test Cases"
 )
 
-# Azure OpenAI setup
 OPENAI_API_VERSION = "2024-02-15-preview"
 OPENAI_API_ENDPOINT = "https://disprz-originals.openai.azure.com/"
 OPENAI_API_KEY = "1dfeeaf8f4e945e5a461f82fd08169b3"
 
-# Function to encode image to base64
 def encode_image(image_path):
     """
     Encodes an image to a base64 string.
@@ -44,9 +42,7 @@ class ExtractedInfo(BaseModel):
     testcases: List[testcaseitems] = Field(..., description='Give the test cases in sequence')
 
 
-# Function to send request with image
-# Function to send request with image
-def send_request_with_image(base64_image, your_prompt):
+def send_request_with_image(base64_images, your_prompt):
     """
     Sends a prompt and an image (as base64) to the GPT model.
     """
@@ -56,17 +52,16 @@ def send_request_with_image(base64_image, your_prompt):
         api_key=OPENAI_API_KEY
     )
 
-    content = [
-        {"type": "text", "text": your_prompt},
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-    ]
+    content = [{"type": "text", "text": your_prompt}]
+    for img in base64_images:
+        content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}})
+    
 
     messages = [
         {"role": "system", "content": "You are an assistant that converts a figma screen into test cases."},
         {"role": "user", "content": content}
     ]
 
-    # Send the request to GPT
     response = client.chat.completions.create(
         model="GPT4o",
         messages=messages,
@@ -83,7 +78,6 @@ def send_request_with_image(base64_image, your_prompt):
     test_cases = json.loads(response)
     return test_cases['testcases']
 
-# Streamlit app
 def main():
     st.markdown(
         """
@@ -96,20 +90,29 @@ def main():
     container2 = st.container(border=True)
     container2.write("Upload Figma Design to Generate Testcases")
 
-    uploaded_file = container2.file_uploader("Choose an image", type=["jpg", "jpeg", "png"])
+    uploaded_files = container2.file_uploader("Upload images (up to 3)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+    if uploaded_files:
+        base64_images = []
+        for uploaded_file in uploaded_files:
+            base64_image = base64.b64encode(uploaded_file.read()).decode('utf-8')
+            base64_images.append(base64_image)
 
-    if uploaded_file is not None:
-        st.session_state["uploaded_image"] = uploaded_file.read()
-        base64_image = base64.b64encode(st.session_state["uploaded_image"]).decode('utf-8')
-        container2.markdown(
-                f"""
-                <div style="text-align: center;">
-                    <img src="data:image/jpeg;base64,{base64_image}" alt="Uploaded Image" style="width:700px;height:300px;"/>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            # Get prompt input from user
+        if len(base64_images) == 1:
+            container2.markdown(f"""
+            <div style="text-align: center;">
+                <img src="data:image/jpeg;base64,{base64_images[0]}" alt="Uploaded Image" style="width:700px;height:300px;"/>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            cols = container2.columns(len(base64_images))
+            for i, image in enumerate(base64_images):
+                with cols[i]:
+                    st.markdown(f"""
+                    <div style="text-align: center;">
+                        <img src="data:image/jpeg;base64,{image}" alt="Uploaded Image" style="width:700px;height:300px;"/>
+                    </div>
+                    """, unsafe_allow_html=True)
+
     
     
     st.markdown(
@@ -131,12 +134,11 @@ def main():
     unsafe_allow_html=True,
 )
 
-# Render the text area
     user_answer = container2.text_area("", placeholder="Additional Prompts (Optional)", height=2)
     if user_answer:
-            your_prompt =  "Generate the testcases in json format for the figma image uploaded, The json must be having the following keys: Name,Status,Precondition, Objective,Priority, Automation Coverage,Automation Type,TestScript (Step-by-Step) - Step,Test Script (Step-by-Step) - Test Data, Test Script (Step-by-Step) - Expected Result,Test Script (Plain Text)." + str(user_answer)
+            your_prompt =  "Generate the testcases in json format for the figma image uploaded, The json must be having the following keys: Name,Status,Precondition, Objective,Priority, Automation Coverage,Automation Type,TestScript (Step-by-Step) - Step,Test Script (Step-by-Step) - Test Data, Test Script (Step-by-Step) - Expected Result,Test Script (Plain Text). Generate a minimum of 10 test cases and a mximum of 30 testcases." + str(user_answer)
     else:
-            your_prompt =  "Generate the testcases in json format for the figma image uploaded, The json must be having the following keys: Name,Status,Precondition, Objective,Priority, Automation Coverage,Automation Type,TestScript (Step-by-Step) - Step,Test Script (Step-by-Step) - Test Data, Test Script (Step-by-Step) - Expected Result,Test Script (Plain Text)."
+            your_prompt =  "Generate the testcases in json format for the figma image uploaded, The json must be having the following keys: Name,Status,Precondition, Objective,Priority, Automation Coverage,Automation Type,TestScript (Step-by-Step) - Step,Test Script (Step-by-Step) - Test Data, Test Script (Step-by-Step) - Expected Result,Test Script (Plain Text).Generate a minimum of 10 test cases and a mximum of 30 testcases."
 
 
     container2.markdown(
@@ -162,12 +164,12 @@ def main():
                         </style>
                         """, unsafe_allow_html=True
                     )
-                    # Button to submit the answer
+                    
 
     button2=container2.button("Generate Testcases", type="primary", use_container_width=True)
     if button2:
         try:
-            response = send_request_with_image(base64_image, your_prompt)
+            response = send_request_with_image(base64_images, your_prompt)
             container3=st.container(border=True)
             container3.subheader("Generated Testcases")
             df = pd.DataFrame(response)
@@ -180,8 +182,8 @@ def main():
 
             container3.dataframe(df)
 
-            csv_data = df.to_csv(index=False)
-            b64 = base64.b64encode(csv_data.encode()).decode()
+            st.session_state['csv_data'] = df.to_csv(index=False)
+            b64 = base64.b64encode(st.session_state['csv_data'].encode()).decode()
             download_button_html = f"""
                     <div style="display: flex; justify-content: center;">
                         <a href="data:file/csv;base64,{b64}" download="test_cases.csv">
