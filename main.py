@@ -181,7 +181,7 @@ def main():
                 ]
 
             container3.dataframe(df)
-
+            st.session_state['df'] = df
             st.session_state['csv_data'] = df.to_csv(index=False)
             b64 = base64.b64encode(st.session_state['csv_data'].encode()).decode()
             download_button_html = f"""
