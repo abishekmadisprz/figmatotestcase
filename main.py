@@ -9,6 +9,8 @@ from typing import List
 import json
 import pandas as pd
 from PIL import Image
+import time
+import requests
 st.set_page_config(
     layout="wide",
     page_title="Figma Design to Test Cases"
@@ -25,19 +27,22 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
+class TestScriptStep(BaseModel):
+    TestScriptStepName: str = Field(..., alias='TestScriptStepName', description='Step name for the test script should be a actual name, do not name it Step 1')
+    TestScriptTestData: str = Field(..., alias='TestScriptTestData', description='Test data used for this step')
+    TestScriptExpectedResult: str = Field(..., alias='TestScriptExpectedResult', description='Expected result for this step')
+    TestScriptPlainText: str = Field(..., alias='TestScriptPlainText', description='Plain text description of the step')
+
 class testcaseitems(BaseModel):
     Name: str = Field(..., alias='Name', description='Name of the test case, can be appened with a sample testcaseID like TC001, example name:TC001_User Creation Validation')
-    Status: str = Field(..., alias='Status', description='Status')
+    Status: str = Field(..., alias='Status', description='Status, Should be (Draft, Deprecated, Approved)')
     Precondition: str = Field(..., alias='Precondition', description='Precondition')
     Objective: str = Field(..., alias='Objective', description='Objective')
-    Priority: str = Field(..., alias='Priority', description='Priority')
+    Priority: str = Field(..., alias='Priority', description='Priority, Should be (High, Normal or Low)')
     AutomationCoverage: str = Field(..., alias='AutomationCoverage', description='AutomationCoverage')
     AutomationType: str = Field(..., alias='AutomationType', description='AutomationType')
-    TestScriptStep: str = Field(..., alias='TestScriptStep', description='TestScript (Step-by-Step) - Step')
-    TestScriptTestData: str = Field(..., alias='TestScriptTestData', description='Test Script (Step-by-Step) - Test Data')
-    TestScriptExpectedResult: str = Field(..., alias='TestScriptExpectedResult', description='Test Script (Step-by-Step) - Expected Result')
-    TestScriptPlainText: str = Field(..., alias='TestScriptPlainText', description='Test Script (Plain Text)')
-    
+    TestScriptSteps: List[TestScriptStep] = Field(..., alias='TestScriptSteps', description='List of test script steps')
+
 class ExtractedInfo(BaseModel):
     testcases: List[testcaseitems] = Field(..., description='Give the test cases in sequence')
 
@@ -77,6 +82,130 @@ def send_request_with_image(base64_images, your_prompt):
     print(response)
     test_cases = json.loads(response)
     return test_cases['testcases']
+
+@st.dialog("Deploy to Zepher")
+def deploytozepher(response):
+    user_answer=st.text_area("Enter the folder name")
+    
+    if st.button("Submit"):
+        API_BASE_URL = "https://api.zephyrscale.smartbear.com/v2"
+        TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJjb250ZXh0Ijp7ImJhc2VVcmwiOiJodHRwczovL2Rpc3Byei5hdGxhc3NpYW4ubmV0IiwidXNlciI6eyJhY2NvdW50SWQiOiI2MjAwYjYzZGU1Y2FmZjAwNzBlMTczMTQiLCJ0b2tlbklkIjoiY2I1YWU0MDgtMWM3MC00YjAyLTgxOGUtYjliNTMzNThlMTVlIn19LCJpc3MiOiJjb20ua2Fub2FoLnRlc3QtbWFuYWdlciIsInN1YiI6IjczYTFjODVkLTgzOWYtM2M5YS1iYjY0LWQyMTNjMjQyNGUzMCIsImV4cCI6MTc3MDk4NzMwNywiaWF0IjoxNzM5NDUxMzA3fQ.nQhb6cSv-upA-1uueA_EPQycqaI3OapFu65u9_Gooq8"
+        PROJECT_KEY = "DIS" 
+        PARENT_FOLDER_ID = 20770497
+
+        # Headers
+        HEADERS = {
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+
+        def create_subfolder(folder_name):
+            """Create a subfolder inside the specified folder."""
+            url = f"{API_BASE_URL}/folders"
+            payload = {
+                "name": folder_name,
+                "parentId": PARENT_FOLDER_ID,  # Ensure this is the correct parent folder ID
+                "projectKey": PROJECT_KEY,
+                "folderType": "TEST_CASE"
+            }
+
+            response = requests.post(url, headers=HEADERS, json=payload)
+            if response.status_code == 201:
+                subfolder_id = response.json().get("id")
+                print(f"Subfolder '{folder_name}' created successfully with ID: {subfolder_id}")
+                return subfolder_id
+            else:
+                print(f"Failed to create subfolder: {response.status_code} - {response.text}")
+                return None
+
+        def upload_test_cases_from_json(response, folder_id):
+            """Upload test cases from JSON and manage test steps correctly."""
+            create_url = f"{API_BASE_URL}/testcases"
+            steps_url_template = f"{API_BASE_URL}/testcases/{{test_case_id}}/teststeps"
+
+            for test_case in response:
+                # Step 1: Create the test case
+                payload = {
+                    "projectKey": PROJECT_KEY,
+                    "name": test_case["Name"],
+                    "statusName": test_case.get("Status", "Draft"),
+                    "precondition": test_case.get("Precondition", ""),
+                    "objective": test_case.get("Objective", ""),
+                    "priorityName": test_case.get("Priority", "Normal"),
+                    "folderId": folder_id,
+                    "customFields": {
+                        "Automation Coverage": "Not Applicable",
+                        "Automation Type": "Yet To Start"
+                    }
+                }
+
+                response = requests.post(create_url, headers=HEADERS, json=payload)
+                if response.status_code == 201:
+                    test_case_id = response.json().get("key")
+                    print(f"Test case '{test_case['Name']}' created successfully with ID: {test_case_id}")
+
+                    # Step 2: Overwrite the default placeholder step with the first step
+                    steps_url = steps_url_template.format(test_case_id=test_case_id)
+                    test_steps = test_case.get("TestScriptSteps", [])
+                    if test_steps:
+                        first_step = test_steps[0]
+                        overwrite_payload = {
+                            "mode": "OVERWRITE",
+                            "items": [
+                                {
+                                    "inline": {
+                                        "description": first_step.get("TestScriptStepName", ""),
+                                        "testData": first_step.get("TestScriptTestData", ""),
+                                        "expectedResult": first_step.get("TestScriptExpectedResult", "")
+                                    }
+                                }
+                            ]
+                        }
+
+                        overwrite_response = requests.post(steps_url, headers=HEADERS, json=overwrite_payload)
+                        if overwrite_response.status_code == 201:
+                            print(f"Initial test step overwritten successfully for test case ID: {test_case_id}")
+                        else:
+                            print(f"Failed to overwrite initial test step: {overwrite_response.status_code} - {overwrite_response.text}")
+
+                        # Step 3: Append subsequent steps if available
+                        additional_steps = []
+                        for step in test_steps[1:]:
+                            additional_steps.append({
+                                "inline": {
+                                    "description": step.get("TestScriptStepName", ""),
+                                    "testData": step.get("TestScriptTestData", ""),
+                                    "expectedResult": step.get("TestScriptExpectedResult", "")
+                                }
+                            })
+
+                        if additional_steps:
+                            append_payload = {
+                                "mode": "APPEND",
+                                "items": additional_steps
+                            }
+                            append_response = requests.post(steps_url, headers=HEADERS, json=append_payload)
+                            if append_response.status_code == 201:
+                                print(f"Additional steps appended for test case ID: {test_case_id}")
+                            else:
+                                print(f"Failed to append steps: {append_response.status_code} - {append_response.text}")
+
+                    else:
+                        print(f"No steps found for test case '{test_case['Name']}'")
+
+                    time.sleep(1) 
+
+                else:
+                    print(f"Failed to create test case '{test_case['Name']}': {response.status_code} - {response.text}")
+
+
+
+
+        subfolder_name = user_answer
+        subfolder_id = create_subfolder(subfolder_name)
+        upload_test_cases_from_json(response, subfolder_id)
+        st.rerun()
 
 def main():
     st.markdown(
@@ -134,11 +263,11 @@ def main():
     unsafe_allow_html=True,
 )
 
-    user_answer = container2.text_area("", placeholder="Additional Prompts (Optional)", height=2)
+    user_answer = container2.text_area("", placeholder="Additional Prompts (Optional)", height=68)
     if user_answer:
-            your_prompt =  "Generate the testcases in json format for the figma image uploaded, The json must be having the following keys: Name,Status,Precondition, Objective,Priority, Automation Coverage,Automation Type,TestScript (Step-by-Step) - Step,Test Script (Step-by-Step) - Test Data, Test Script (Step-by-Step) - Expected Result,Test Script (Plain Text). Generate a minimum of 10 test cases and a mximum of 30 testcases." + str(user_answer)
+            your_prompt =  "Generate the testcases in json format for the figma image uploaded, The json must be having the following keys: Name,Status,Precondition, Objective,Priority, Automation Coverage,Automation Type,TestScriptData. Generate a minimum of 10 test cases and a mximum of 30 testcases." + str(user_answer)
     else:
-            your_prompt =  "Generate the testcases in json format for the figma image uploaded, The json must be having the following keys: Name,Status,Precondition, Objective,Priority, Automation Coverage,Automation Type,TestScript (Step-by-Step) - Step,Test Script (Step-by-Step) - Test Data, Test Script (Step-by-Step) - Expected Result,Test Script (Plain Text).Generate a minimum of 10 test cases and a mximum of 30 testcases."
+            your_prompt =  "Generate the testcases in json format for the figma image uploaded, The json must be having the following keys: Name,Status,Precondition, Objective,Priority, Automation Coverage,Automation Type,TestScriptData.Generate a minimum of 10 test cases and a mximum of 30 testcases."
 
 
     container2.markdown(
@@ -166,19 +295,39 @@ def main():
                     )
                     
 
-    button2=container2.button("Generate Testcases", type="primary", use_container_width=True)
+    button2=container2.button("Generate Testcases", type="primary", use_container_width=True, key="Hi")
     if button2:
         try:
             response = send_request_with_image(base64_images, your_prompt)
             container3=st.container(border=True)
             container3.subheader("Generated Testcases")
-            df = pd.DataFrame(response)
+            rows = []
+            st.session_state['response']=response
+            for testcase in response:
+                step_names = '\n'.join([f"{idx+1}. {step['TestScriptStepName']}" for idx, step in enumerate(testcase['TestScriptSteps'])])
+                test_data = '\n'.join([f"{idx+1}. {step['TestScriptTestData']}" for idx, step in enumerate(testcase['TestScriptSteps'])])
+                expected_results = '\n'.join([f"{idx+1}. {step['TestScriptExpectedResult']}" for idx, step in enumerate(testcase['TestScriptSteps'])])
+                plain_texts = '\n'.join([f"{idx+1}. {step['TestScriptPlainText']}" for idx, step in enumerate(testcase['TestScriptSteps'])])
+
+                rows.append({
+                    "Name": testcase['Name'],
+                    "Status": testcase['Status'],
+                    "Precondition": testcase['Precondition'],
+                    "Objective": testcase['Objective'],
+                    "Priority": testcase['Priority'],
+                    "Automation Coverage": testcase['AutomationCoverage'],
+                    "Automation Type": testcase['AutomationType'],
+                    "TestScript (Step-by-Step) - Step": step_names,
+                    "Test Script (Step-by-Step) - Test Data": test_data,
+                    "Test Script (Step-by-Step) - Expected Result": expected_results,
+                    "Test Script (Plain Text)": plain_texts
+                })
+            df = pd.DataFrame(rows)
             df.columns = [
-                    "Name", "Status", "Precondition", "Objective", "Priority", "Automation Coverage", 
-                    "Automation Type", "TestScript (Step-by-Step) - Step", 
-                    "Test Script (Step-by-Step) - Test Data", 
-                    "Test Script (Step-by-Step) - Expected Result", "Test Script (Plain Text)"
-                ]
+                        "Name", "Status", "Precondition", "Objective", "Priority", "Automation Coverage", 
+                        "Automation Type", "TestScript (Step-by-Step) - Step", "Test Script (Step-by-Step) - Test Data", 
+                        "Test Script (Step-by-Step) - Expected Result", "Test Script (Plain Text)"
+                    ]
 
             container3.dataframe(df)
             st.session_state['df'] = df
@@ -192,14 +341,16 @@ def main():
                     </div>
                 """
             container3.markdown(download_button_html, unsafe_allow_html=True)
-            deploy_button_html = """
-                    <div style="display: flex; justify-content: center; margin-top: 10px;">
-                        <button style="background-color: #49d649; color: black; padding: 10px; font-size: 16px; border: none; border-radius: 5px; cursor: pointer; margin-bottom: 20px;" disabled>Deploy to Zepher</button>
-                    </div>
-                """
-            container3.markdown(deploy_button_html, unsafe_allow_html=True)
+
         except Exception as e:
             st.error(f"An error occurred: {e}")
 
+def main2():
+    if 'response' in st.session_state:
+        if st.button("Deploy to Zepher", type="primary", use_container_width=True, key="Hello"):
+            deploytozepher(st.session_state['response'])
+            st.session_state.pop('response', None)
+
 if __name__ == "__main__":
     main()
+    main2()
